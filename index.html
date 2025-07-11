@@ -8,6 +8,19 @@
   <style>
     #map { height: 90vh; width: 100%; }
     #controls { padding: 10px; }
+    /* speed-legend (Leaflet control) */
+    .speed-legend{
+      background:rgba(255,255,255,0.85);
+      padding:6px 8px;
+      font:12px/14px Arial,sans-serif;
+      box-shadow:0 0 15px rgba(0,0,0,0.2);
+      border-radius:5px;
+    }
+    .speed-legend i{
+      width:12px;height:12px;
+      float:left;margin-right:6px;
+      opacity:.7;
+    }
   </style>
 </head>
 <body>
@@ -37,6 +50,7 @@
         Math.floor(((v-min)/(max-min+1e-9))*colours.length))];
 
     let lastMarkers = [];          // will hold {lat, lon, name} for the current run
+    let speedLegend = null;      // Leaflet control instance (one per track)
 
     function downloadAsGPX(pts){
       const gpx =
@@ -50,6 +64,23 @@ ${pts.map(p=>`  <wpt lat="${p.lat}" lon="${p.lon}"><name>${p.name}</name></wpt>`
         download: 'markers.gpx'
       });
       a.click(); URL.revokeObjectURL(a.href);
+    }
+
+    function updateLegend(min, max){
+      if (speedLegend) map.removeControl(speedLegend);   // wipe previous one
+      const steps = colours.length, step = (max-min||1)/steps;
+
+      speedLegend = L.control({position:'bottomright'});
+      speedLegend.onAdd = function(){
+        const div = L.DomUtil.create('div','speed-legend');
+        for(let i=0;i<steps;i++){
+          const a = (min + i*step).toFixed(1),
+                b = (min + (i+1)*step).toFixed(1);
+          div.innerHTML += `<i style="background:${colours[i]}"></i>${a}–${b} m/s<br>`;
+        }
+        return div;
+      };
+      speedLegend.addTo(map);
     }
 
     /* ––––– map ––––– */
@@ -137,6 +168,7 @@ ${pts.map(p=>`  <wpt lat="${p.lat}" lon="${p.lon}"><name>${p.name}</name></wpt>`
         (((p.time - pts[i].time) / 1000) || 1)         // m / s
       );
       const [min, max] = [Math.min(...speeds), Math.max(...speeds)];
+      updateLegend(min, max);
 
       /* draw the coloured track + add a marker at the end of each bucket
          whose popup shows the distance (km) covered inside that bucket   */
