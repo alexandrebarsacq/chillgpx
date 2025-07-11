@@ -12,11 +12,10 @@
 </head>
 <body>
   <div id="controls">
+    <p>Upload a .gpx export from komoot. Input intended days. Get theorical time-based end-of-day location</p>
     <input type="file" id="gpxFile" accept=".gpx" />
-    <label><input type="radio" name="mode" value="speed" checked /> Speed</label>
-    <label><input type="radio" name="mode" value="days" /> Days</label>
     <input type="number" id="daysCount" placeholder="#days" />
-    <button id="renderBtn">Render</button>
+    <button id="daysBtn">Render days</button>
     <button id="exportBtn" disabled>Export markers as GPX</button>
   </div>
   <div id="map"></div>
@@ -62,14 +61,14 @@ ${pts.map(p=>`  <wpt lat="${p.lat}" lon="${p.lon}"><name>${p.name}</name></wpt>`
 
     /* ––––– UI ––––– */
 
-    document.getElementById('renderBtn').addEventListener('click', () => {
+    /* render buckets by “days” -------------------------------------------- */
+    document.getElementById('daysBtn').addEventListener('click', () => {
       const file = document.getElementById('gpxFile').files[0];
       if (!file) { alert('Choose a GPX file'); return; }
-      const mode  = document.querySelector('input[name="mode"]:checked').value;
-      const v = document.getElementById('daysCount').value.trim();
-      const daysN = v ? parseFloat(v) : NaN;            // may be fractional
+      const v      = document.getElementById('daysCount').value.trim();
+      const daysN  = v ? parseFloat(v) : NaN;          // may still be NaN
       const reader = new FileReader();
-      reader.onload = e => renderMap(e.target.result, mode, daysN);
+      reader.onload = e => renderMap(e.target.result, 'days', daysN);
       reader.readAsText(file);
     });
 
@@ -91,11 +90,7 @@ ${pts.map(p=>`  <wpt lat="${p.lat}" lon="${p.lon}"><name>${p.name}</name></wpt>`
         }));
       if (pts.length<2){alert('Not enough points');return;}
 
-      if (mode === 'speed') {
-        drawSpeed(pts);          // show every point, coloured by speed
-      } else {
-        drawDays(pts, daysN);    // show only the requested days
-      }
+      drawDays(pts, daysN);    // show only the requested days
 
       if (lastMarkers.length)
         document.getElementById('exportBtn').disabled = false;
@@ -105,20 +100,9 @@ ${pts.map(p=>`  <wpt lat="${p.lat}" lon="${p.lon}"><name>${p.name}</name></wpt>`
       }
     }
 
-    function drawSpeed(pts){
-      const speeds = pts.slice(1).map((p,i)=>
-        haversine(pts[i].lat,pts[i].lon,p.lat,p.lon) /
-        (((p.time-pts[i].time)/1000)||1));
-      const [min,max]=[Math.min(...speeds),Math.max(...speeds)];
-      pts.slice(1).forEach((p,i)=>L.polyline(
-        [[pts[i].lat,pts[i].lon],[p.lat,p.lon]],
-        {color:colourForSpeed(speeds[i],min,max),weight:4}
-      ).addTo(drawn));
-    }
 
     function drawDays(pts, daysN){
       const base = pts[0].time;                       // ride start-time (ms)
-      const palette = ['red','blue','green','orange','purple','cyan','magenta'];
 
       /* decide which time-bucketing logic to use — partial first day then equal slices */
       let bucketOf;                                            // maps time → bucket #
@@ -147,6 +131,13 @@ ${pts.map(p=>`  <wpt lat="${p.lat}" lon="${p.lon}"><name>${p.name}</name></wpt>`
         bucketOf = _ => 0;
       }
 
+      // Compute segment speeds and their limits
+      const speeds = pts.slice(1).map((p,i)=>
+        haversine(pts[i].lat, pts[i].lon, p.lat, p.lon) /
+        (((p.time - pts[i].time) / 1000) || 1)         // m / s
+      );
+      const [min, max] = [Math.min(...speeds), Math.max(...speeds)];
+
       /* draw the coloured track + add a marker at the end of each bucket
          whose popup shows the distance (km) covered inside that bucket   */
       let currentBucket = bucketOf(pts[0].time);   // bucket we are filling
@@ -174,7 +165,7 @@ ${pts.map(p=>`  <wpt lat="${p.lat}" lon="${p.lon}"><name>${p.name}</name></wpt>`
 
         L.polyline(
           [[prev.lat, prev.lon], [curr.lat, curr.lon]],
-          { color: palette[b % palette.length], weight: 4 }
+          { color: colourForSpeed(speeds[i - 1], min, max), weight: 4 }
         ).addTo(drawn);
       }
 
