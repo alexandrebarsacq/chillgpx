@@ -1,0 +1,115 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>GPX visualiser</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+  <style>
+    #map { height: 90vh; width: 100%; }
+    #controls { padding: 10px; }
+  </style>
+</head>
+<body>
+  <div id="controls">
+    <input type="file" id="gpxFile" accept=".gpx" />
+    <label><input type="radio" name="mode" value="speed" checked /> Speed</label>
+    <label><input type="radio" name="mode" value="days" /> Days</label>
+    <input type="number" id="daysCount" placeholder="#days" style="display:none" />
+    <button id="renderBtn">Render</button>
+  </div>
+  <div id="map"></div>
+
+  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+  <script>
+    /* ––––– helpers ––––– */
+    const R = 6371000;
+    const toRad = d => d * Math.PI / 180;
+    const haversine = (la1, lo1, la2, lo2) => {
+      const dLat = toRad(la2 - la1), dLon = toRad(lo2 - lo1);
+      const a = Math.sin(dLat/2)**2 +
+                Math.cos(toRad(la1))*Math.cos(toRad(la2))*Math.sin(dLon/2)**2;
+      return 2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    };
+    const colours = ['purple','blue','green','yellow','orange','red'];
+    const colourForSpeed = (v,min,max) =>
+      colours[Math.min(colours.length-1,
+        Math.floor(((v-min)/(max-min+1e-9))*colours.length))];
+
+    /* ––––– map ––––– */
+    const map = L.map('map').setView([0,0],2);
+    const drawn = L.layerGroup().addTo(map);   /* holds the track currently shown */
+    L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',{
+      attribution:'© OpenStreetMap, SRTM | OpenTopoMap (CC-BY-SA)'
+    }).addTo(map);
+
+    /* ––––– UI ––––– */
+    document.querySelectorAll('input[name="mode"]').forEach(r =>
+      r.addEventListener('change', e =>
+        document.getElementById('daysCount').style.display =
+          e.target.value === 'days' ? 'inline-block' : 'none')
+    );
+
+    document.getElementById('renderBtn').addEventListener('click', () => {
+      const file = document.getElementById('gpxFile').files[0];
+      if (!file) { alert('Choose a GPX file'); return; }
+      const mode  = document.querySelector('input[name="mode"]:checked').value;
+      const daysN = parseInt(document.getElementById('daysCount').value || '0',10);
+      const reader = new FileReader();
+      reader.onload = e => renderMap(e.target.result, mode, daysN);
+      reader.readAsText(file);
+    });
+
+    /* ––––– GPX → map ––––– */
+    function renderMap(gpxText, mode, daysN){
+      drawn.clearLayers();                    // wipe previous track & markers
+      const pts = Array.from(new DOMParser()
+        .parseFromString(gpxText,'application/xml')
+        .getElementsByTagName('trkpt'))
+        .map(p => ({
+          lat:+p.getAttribute('lat'),
+          lon:+p.getAttribute('lon'),
+          time:new Date(p.getElementsByTagName('time')[0]?.textContent)
+        }));
+      if (pts.length<2){alert('Not enough points');return;}
+
+      const visiblePts = mode === 'speed'
+        ? (drawSpeed(pts), pts)         // all points are displayed
+        : drawDays(pts, daysN);         // returns only the rendered points
+
+      if (drawn.getLayers().length) {
+        map.fitBounds(drawn.getBounds());
+      }
+    }
+
+    function drawSpeed(pts){
+      const speeds = pts.slice(1).map((p,i)=>
+        haversine(pts[i].lat,pts[i].lon,p.lat,p.lon) /
+        (((p.time-pts[i].time)/1000)||1));
+      const [min,max]=[Math.min(...speeds),Math.max(...speeds)];
+      pts.slice(1).forEach((p,i)=>L.polyline(
+        [[pts[i].lat,pts[i].lon],[p.lat,p.lon]],
+        {color:colourForSpeed(speeds[i],min,max),weight:4}
+      ).addTo(drawn));
+    }
+
+    function drawDays(pts, daysN){
+      const base = pts[0].time;
+      const dayOf = t => Math.floor((t - base) / (24 * 3600 * 1000));
+      const palette = ['red','blue','green','orange','purple','cyan','magenta'];
+      const included = [pts[0]];                 // points that will be shown
+
+      pts.slice(1).forEach((p, i) => {
+        const d = dayOf(p.time);
+        if (daysN && d >= daysN) return;         // skip segments beyond limit
+        included.push(p);
+        L.polyline(
+          [[pts[i].lat, pts[i].lon], [p.lat, p.lon]],
+          {color: palette[d % palette.length], weight: 4}
+        ).addTo(drawn);
+      });
+      return included;                           // used for fitBounds
+    }
+  </script>
+</body>
+</html>
