@@ -15,8 +15,9 @@
     <input type="file" id="gpxFile" accept=".gpx" />
     <label><input type="radio" name="mode" value="speed" checked /> Speed</label>
     <label><input type="radio" name="mode" value="days" /> Days</label>
-    <input type="number" id="daysCount" placeholder="#days" style="display:none" />
+    <input type="number" id="daysCount" placeholder="#days" />
     <button id="renderBtn">Render</button>
+    <button id="exportBtn" disabled>Export markers as GPX</button>
   </div>
   <div id="map"></div>
 
@@ -36,6 +37,22 @@
       colours[Math.min(colours.length-1,
         Math.floor(((v-min)/(max-min+1e-9))*colours.length))];
 
+    let lastMarkers = [];          // will hold {lat, lon, name} for the current run
+
+    function downloadAsGPX(pts){
+      const gpx =
+`<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="GPX visualiser">
+${pts.map(p=>`  <wpt lat="${p.lat}" lon="${p.lon}"><name>${p.name}</name></wpt>`).join('\n')}
+</gpx>`;
+      const blob = new Blob([gpx], {type:'application/gpx+xml'});
+      const a = Object.assign(document.createElement('a'), {
+        href: URL.createObjectURL(blob),
+        download: 'markers.gpx'
+      });
+      a.click(); URL.revokeObjectURL(a.href);
+    }
+
     /* ––––– map ––––– */
     const map = L.map('map').setView([0,0],2);
     const drawn = L.layerGroup().addTo(map);   /* holds the track currently shown */
@@ -44,24 +61,25 @@
     }).addTo(map);
 
     /* ––––– UI ––––– */
-    document.querySelectorAll('input[name="mode"]').forEach(r =>
-      r.addEventListener('change', e =>
-        document.getElementById('daysCount').style.display =
-          e.target.value === 'days' ? 'inline-block' : 'none')
-    );
 
     document.getElementById('renderBtn').addEventListener('click', () => {
       const file = document.getElementById('gpxFile').files[0];
       if (!file) { alert('Choose a GPX file'); return; }
       const mode  = document.querySelector('input[name="mode"]:checked').value;
-      const daysN = parseInt(document.getElementById('daysCount').value || '0',10);
+      const v = document.getElementById('daysCount').value.trim();
+      const daysN = v ? parseFloat(v) : NaN;            // may be fractional
       const reader = new FileReader();
       reader.onload = e => renderMap(e.target.result, mode, daysN);
       reader.readAsText(file);
     });
 
+    document.getElementById('exportBtn')
+            .addEventListener('click', () => downloadAsGPX(lastMarkers));
+
     /* ––––– GPX → map ––––– */
     function renderMap(gpxText, mode, daysN){
+      lastMarkers = [];
+      document.getElementById('exportBtn').disabled = true;
       drawn.clearLayers();                    // wipe previous track & markers
       const pts = Array.from(new DOMParser()
         .parseFromString(gpxText,'application/xml')
@@ -73,9 +91,14 @@
         }));
       if (pts.length<2){alert('Not enough points');return;}
 
-      const visiblePts = mode === 'speed'
-        ? (drawSpeed(pts), pts)         // all points are displayed
-        : drawDays(pts, daysN);         // returns only the rendered points
+      if (mode === 'speed') {
+        drawSpeed(pts);          // show every point, coloured by speed
+      } else {
+        drawDays(pts, daysN);    // show only the requested days
+      }
+
+      if (lastMarkers.length)
+        document.getElementById('exportBtn').disabled = false;
 
       if (drawn.getLayers().length) {
         map.fitBounds(drawn.getBounds());
@@ -94,21 +117,70 @@
     }
 
     function drawDays(pts, daysN){
-      const base = pts[0].time;
-      const dayOf = t => Math.floor((t - base) / (24 * 3600 * 1000));
+      const base = pts[0].time;                       // ride start-time (ms)
       const palette = ['red','blue','green','orange','purple','cyan','magenta'];
-      const included = [pts[0]];                 // points that will be shown
 
-      pts.slice(1).forEach((p, i) => {
-        const d = dayOf(p.time);
-        if (daysN && d >= daysN) return;         // skip segments beyond limit
-        included.push(p);
+      /* decide which time-bucketing logic to use — partial first day then equal slices */
+      let bucketOf;                                            // maps time → bucket #
+      if (Number.isFinite(daysN) && daysN > 0) {
+        const totalDuration = pts[pts.length-1].time - base;   // full ride span (ms)
+        const slice = totalDuration / daysN;                   // “x” in the description
+        const intDays = Math.floor(daysN);                     // number of whole days
+        const frac    = daysN - intDays;                       // 0 ≤ frac < 1
+
+        if (frac === 0) {                                      // no partial day
+          /* keep the last sample inside the last bucket       */
+          bucketOf = t => {
+            const idx = Math.floor((t - base) / slice);
+            return Math.min(daysN - 1, idx);      // clamp
+          };
+        } else {                                               // partial first bucket
+          const firstLen = frac * slice;                       // ms length of bucket 0
+          bucketOf = t => {
+            const dt  = t - base;
+            if (dt < firstLen) return 0;
+            const idx = 1 + Math.floor((dt - firstLen) / slice);
+            return Math.min(intDays, idx);      // clamp
+          };
+        }
+      } else {                                                 // invalid / empty input
+        bucketOf = _ => 0;
+      }
+
+      /* draw the coloured track + add a marker at the end of each bucket
+         whose popup shows the distance (km) covered inside that bucket   */
+      let currentBucket = bucketOf(pts[0].time);   // bucket we are filling
+      let bucketDist    = 0;                       // metres accumulated in it
+
+      for (let i = 1; i < pts.length; i++) {
+        const prev = pts[i-1], curr = pts[i];
+        const b = bucketOf(curr.time);
+
+        /* if we are entering a new bucket, close the old one with a marker */
+        if (b !== currentBucket) {
+          const name = (bucketDist/1000).toFixed(1) + ' km';
+          L.marker([prev.lat, prev.lon]).addTo(drawn).bindPopup(name);
+          lastMarkers.push({lat: prev.lat, lon: prev.lon, name});
+          currentBucket = b;
+          bucketDist = 0;
+        }
+
+        const segDist = haversine(prev.lat, prev.lon, curr.lat, curr.lon);
+        bucketDist += segDist;
+
         L.polyline(
-          [[pts[i].lat, pts[i].lon], [p.lat, p.lon]],
-          {color: palette[d % palette.length], weight: 4}
+          [[prev.lat, prev.lon], [curr.lat, curr.lon]],
+          { color: palette[b % palette.length], weight: 4 }
         ).addTo(drawn);
-      });
-      return included;                           // used for fitBounds
+      }
+
+      /* drop the final bucket’s marker */
+      if (bucketDist) {
+        const last = pts[pts.length - 1];
+        const name = (bucketDist/1000).toFixed(1) + ' km';
+        L.marker([last.lat, last.lon]).addTo(drawn).bindPopup(name);
+        lastMarkers.push({lat: last.lat, lon: last.lon, name});
+      }
     }
   </script>
 </body>
