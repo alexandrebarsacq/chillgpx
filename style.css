@@ -1,6 +1,8 @@
 #map { height: 90vh; width: 100%; }
 #controls { padding: 10px; }
 
+.elev-chart{width:100%;height:150px;margin-top:8px;}
+
 /* speed-legend (Leaflet control) */
 .speed-legend{
   background:rgba(255,255,255,0.85);

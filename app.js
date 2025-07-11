@@ -14,6 +14,7 @@ const colourForSpeed = (v,min,max) =>
 
 let lastMarkers = [];          // will hold {lat, lon, name} for the current run
 let speedLegend = null;      // Leaflet control instance (one per track)
+let elevationChart = null;
 
 function downloadAsGPX(pts){
   const gpx =
@@ -44,6 +45,28 @@ function updateLegend(min, max){
     return div;
   };
   speedLegend.addTo(map);
+}
+
+function drawElevationChart(pts){
+  const c=document.getElementById('elevChart'); if(!c) return;
+
+  const labels=[0], data=[pts[0].ele||0];     // km , metres
+  let cum=0;
+  for(let i=1;i<pts.length;i++){
+    cum+=haversine(pts[i-1].lat,pts[i-1].lon,pts[i].lat,pts[i].lon)/1000;
+    labels.push(+cum.toFixed(1));
+    data.push(pts[i].ele||data[data.length-1]);
+  }
+
+  if(elevationChart) elevationChart.destroy();
+  elevationChart = new Chart(c.getContext('2d'),{
+    type:'line',
+    data:{labels,datasets:[{data,
+      borderColor:'brown',pointRadius:0,fill:false,tension:0.1}]},
+    options:{plugins:{legend:{display:false}},
+             scales:{x:{title:{display:true,text:'Distance (km)'}},
+                     y:{title:{display:true,text:'Elevation (m)'}}}}
+  });
 }
 
 /* ––––– map ––––– */
@@ -80,11 +103,13 @@ function renderMap(gpxText, mode, numberOfDays){
     .map(p => ({
       lat:+p.getAttribute('lat'),
       lon:+p.getAttribute('lon'),
+      ele:parseFloat(p.getElementsByTagName('ele')[0]?.textContent||'0'),
       time:new Date(p.getElementsByTagName('time')[0]?.textContent)
     }));
   if (pts.length<2){alert('Not enough points');return;}
 
   drawDays(pts, numberOfDays);    // show only the requested days
+  drawElevationChart(pts);
 
   if (lastMarkers.length)
     document.getElementById('exportBtn').disabled = false;
