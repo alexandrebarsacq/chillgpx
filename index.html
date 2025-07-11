@@ -151,6 +151,7 @@ ${pts.map(p=>`  <wpt lat="${p.lat}" lon="${p.lon}"><name>${p.name}</name></wpt>`
          whose popup shows the distance (km) covered inside that bucket   */
       let currentBucket = bucketOf(pts[0].time);   // bucket we are filling
       let bucketDist    = 0;                       // metres accumulated in it
+      let bucketTime    = 0;                       // ms accumulated in it
 
       for (let i = 1; i < pts.length; i++) {
         const prev = pts[i-1], curr = pts[i];
@@ -158,15 +159,18 @@ ${pts.map(p=>`  <wpt lat="${p.lat}" lon="${p.lon}"><name>${p.name}</name></wpt>`
 
         /* if we are entering a new bucket, close the old one with a marker */
         if (b !== currentBucket) {
-          const name = (bucketDist/1000).toFixed(1) + ' km';
+          const name = (bucketDist/1000).toFixed(1) + ' km, ' +
+                       (bucketTime/3_600_000).toFixed(1) + ' h';
           L.marker([prev.lat, prev.lon]).addTo(drawn).bindPopup(name);
           lastMarkers.push({lat: prev.lat, lon: prev.lon, name});
           currentBucket = b;
           bucketDist = 0;
+          bucketTime = 0;
         }
 
         const segDist = haversine(prev.lat, prev.lon, curr.lat, curr.lon);
         bucketDist += segDist;
+        bucketTime += (curr.time - prev.time);
 
         L.polyline(
           [[prev.lat, prev.lon], [curr.lat, curr.lon]],
@@ -177,7 +181,8 @@ ${pts.map(p=>`  <wpt lat="${p.lat}" lon="${p.lon}"><name>${p.name}</name></wpt>`
       /* drop the final bucket’s marker */
       if (bucketDist) {
         const last = pts[pts.length - 1];
-        const name = (bucketDist/1000).toFixed(1) + ' km';
+        const name = (bucketDist/1000).toFixed(1) + ' km, ' +
+                     (bucketTime/3_600_000).toFixed(1) + ' h';
         L.marker([last.lat, last.lon]).addTo(drawn).bindPopup(name);
         lastMarkers.push({lat: last.lat, lon: last.lon, name});
       }
