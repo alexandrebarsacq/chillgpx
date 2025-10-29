@@ -1,16 +1,19 @@
 /* ––––– helpers ––––– */
-const R = 6371000;
-const toRad = d => d * Math.PI / 180;
+const EARTH_RADIUS_M = 6_371_000;          // metres
+const degreesToRadians = (deg) => deg * Math.PI / 180;
 const haversine = (la1, lo1, la2, lo2) => {
-  const dLat = toRad(la2 - la1), dLon = toRad(lo2 - lo1);
+  const dLat = degreesToRadians(la2 - la1), dLon = degreesToRadians(lo2 - lo1);
   const a = Math.sin(dLat/2)**2 +
-            Math.cos(toRad(la1))*Math.cos(toRad(la2))*Math.sin(dLon/2)**2;
-  return 2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+            Math.cos(degreesToRadians(la1))*Math.cos(degreesToRadians(la2))*Math.sin(dLon/2)**2;
+  return 2 * EARTH_RADIUS_M * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 };
-const colours = ['purple','blue','green','yellow','orange','red'];
-const colourForSpeed = (v,min,max) =>
-  colours[Math.min(colours.length-1,
-    Math.floor(((v-min)/(max-min+1e-9))*colours.length))];
+const SPEED_COLOURS = ['purple','blue','green','yellow','orange','red'];
+const colourForSpeed = (speed, min, max) => {
+  const denominator   = Math.max(max - min, 1e-9);          // avoid /0
+  const rawIndex      = ((speed - min) / denominator) * SPEED_COLOURS.length;
+  const paletteIndex  = Math.min(SPEED_COLOURS.length - 1, Math.floor(rawIndex));
+  return SPEED_COLOURS[paletteIndex];
+};
 
 let lastMarkers = [];          // will hold {lat, lon, name} for the current run
 let speedLegend = null;      // Leaflet control instance (one per track)
@@ -32,7 +35,8 @@ ${pts.map(p=>`  <wpt lat="${p.lat}" lon="${p.lon}"><name>${p.name}</name></wpt>`
 
 function updateLegend(min, max){
   if (speedLegend) map.removeControl(speedLegend);   // wipe previous one
-  const steps = colours.length, step = (max-min||1)/steps;
+  const steps = SPEED_COLOURS.length;
+  const step  = (max - min || 1) / steps;
 
   speedLegend = L.control({position:'bottomright'});
   speedLegend.onAdd = function(){
@@ -40,7 +44,7 @@ function updateLegend(min, max){
     for(let i=0;i<steps;i++){
       const a = (min + i*step).toFixed(1),
             b = (min + (i+1)*step).toFixed(1);
-      div.innerHTML += `<i style="background:${colours[i]}"></i>${a}–${b} m/s<br>`;
+      div.innerHTML += `<i style="background:${SPEED_COLOURS[i]}"></i>${a}–${b} m/s<br>`;
     }
     return div;
   };
@@ -85,7 +89,7 @@ document.getElementById('daysBtn').addEventListener('click', () => {
   const v      = document.getElementById('daysCount').value.trim();
   const numberOfDays  = v ? parseFloat(v) : NaN;          // may still be NaN
   const reader = new FileReader();
-  reader.onload = e => renderMap(e.target.result, 'days', numberOfDays);
+  reader.onload = e => renderMap(e.target.result, numberOfDays);
   reader.readAsText(file);
 });
 
@@ -93,7 +97,7 @@ document.getElementById('exportBtn')
         .addEventListener('click', () => downloadAsGPX(lastMarkers));
 
 /* ––––– GPX → map ––––– */
-function renderMap(gpxText, mode, numberOfDays){
+function renderMap(gpxText, numberOfDays){
   lastMarkers = [];
   document.getElementById('exportBtn').disabled = true;
   drawn.clearLayers();                    // wipe previous track & markers
@@ -122,6 +126,12 @@ function renderMap(gpxText, mode, numberOfDays){
 }
 
 
+const km      = (m)  => (m / 1_000).toFixed(1);
+const hours   = (ms) => (ms / 3_600_000).toFixed(1);
+const segmentSpeed = (distM, timeMs) =>
+  distM / Math.max(timeMs / 1000, 1);       // m / s
+const popupText = (distM, timeMs) => `${km(distM)} km, ${hours(timeMs)} h`;
+
 function drawDays(pts, numberOfDays){
   const base = pts[0].time;                       // ride start-time (ms)
 
@@ -136,10 +146,11 @@ function drawDays(pts, numberOfDays){
   let   nextT   = +base + firstMs;                                               // next threshold timestamp (ms)
 
   // Compute segment speeds and their limits
-  const speeds = pts.slice(1).map((p,i)=>
-    haversine(pts[i].lat, pts[i].lon, p.lat, p.lon) /
-    (((p.time - pts[i].time) / 1000) || 1)         // m / s
-  );
+  const speeds = pts.length > 1
+    ? pts.slice(1).map((p,i) => segmentSpeed(
+        haversine(pts[i].lat, pts[i].lon, p.lat, p.lon),
+        p.time - pts[i].time))
+    : [0];
   const [min, max] = [Math.min(...speeds), Math.max(...speeds)];
   updateLegend(min, max);
 
@@ -158,8 +169,7 @@ function drawDays(pts, numberOfDays){
 
     /* emit one marker for every threshold we cross            */
     while (curr.time >= nextT) {
-      const name = (bucketDist/1000).toFixed(1) + ' km, ' +
-                   (bucketTime/3_600_000).toFixed(1) + ' h';
+      const name = popupText(bucketDist, bucketTime);
       L.marker([prev.lat, prev.lon]).addTo(drawn).bindPopup(name);
       lastMarkers.push({lat: prev.lat, lon: prev.lon, name});
 
@@ -176,8 +186,7 @@ function drawDays(pts, numberOfDays){
   /* drop the final slice’s marker */
   if (bucketDist) {
     const last = pts[pts.length - 1];
-    const name = (bucketDist/1000).toFixed(1) + ' km, ' +
-                 (bucketTime/3_600_000).toFixed(1) + ' h';
+    const name = popupText(bucketDist, bucketTime);
     L.marker([last.lat, last.lon]).addTo(drawn).bindPopup(name);
     lastMarkers.push({lat: last.lat, lon: last.lon, name});
   }
